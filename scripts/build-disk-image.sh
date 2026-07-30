@@ -87,6 +87,12 @@ tar -xf "$ROOTFS_TAR" -C "$ROOT"
 rm -rf "$ROOT/proc" "$ROOT/sys" "$ROOT/dev" "$ROOT/run"
 mkdir -p "$ROOT/proc" "$ROOT/sys" "$ROOT/dev" "$ROOT/run" "$ROOT/tmp"
 
+# Critical: docker export leaves /.dockerenv, which makes systemd think the
+# real device is a container and skips units like systemd-timesyncd
+# (ConditionVirtualization=!container).
+rm -f "$ROOT/.dockerenv" "$ROOT/run/systemd/container"
+rm -f "$ROOT/etc/mtab"
+
 mount --bind /dev "$ROOT/dev"
 mount --bind /dev/pts "$ROOT/dev/pts"
 mount -t proc proc "$ROOT/proc"
