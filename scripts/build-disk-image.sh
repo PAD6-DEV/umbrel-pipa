@@ -137,10 +137,11 @@ Priority: optional
 Architecture: all
 Maintainer: umbrel-pipa <pipa@local>
 Provides: linux-firmware
-Depends: firmware-linux
-Description: Compatibility shim mapping Ubuntu linux-firmware to Debian firmware-linux
+Depends: firmware-linux, firmware-atheros, firmware-qcom-soc
+Description: Compatibility shim mapping Ubuntu linux-firmware to Debian firmware packages
 EOF
-    chroot "$ROOT" env DEBIAN_FRONTEND=noninteractive apt-get install -y firmware-linux
+    chroot "$ROOT" env DEBIAN_FRONTEND=noninteractive apt-get install -y \
+        firmware-linux firmware-atheros firmware-qcom-soc
     dpkg-deb -b "$stage" "$ROOT/tmp/pipa-linux-firmware-compat.deb"
     chroot "$ROOT" dpkg -i /tmp/pipa-linux-firmware-compat.deb
     rm -rf "$stage" "$ROOT/tmp/pipa-linux-firmware-compat.deb"

@@ -5,6 +5,9 @@ linux-modules-pipa
 xiaomi-pipa-firmware
 # Debian firmware (Ubuntu's linux-firmware name is provided by a compat shim at build time)
 firmware-linux
+# ath11k/QCA6390 WiFi + BT firmware (Pad 6) — not in firmware-linux alone
+firmware-atheros
+firmware-qcom-soc
 grub-efi-arm64
 shim-signed
 dracut

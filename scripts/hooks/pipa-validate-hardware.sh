@@ -15,6 +15,15 @@ ok "kernel"
     || fail "pipa qcom firmware missing"
 ok "firmware"
 
+# WiFi (ath11k / QCA6390)
+[ -f /lib/firmware/ath11k/QCA6390/hw2.0/amss.bin ] \
+    || [ -f /usr/lib/firmware/ath11k/QCA6390/hw2.0/amss.bin ] \
+    || fail "ath11k QCA6390 amss.bin missing (install firmware-atheros)"
+[ -f /lib/firmware/ath11k/QCA6390/hw2.0/board-2.bin ] \
+    || [ -f /usr/lib/firmware/ath11k/QCA6390/hw2.0/board-2.bin ] \
+    || fail "ath11k QCA6390 board-2.bin missing"
+ok "wifi-firmware"
+
 # Networking essentials for umbrel.local
 command -v NetworkManager >/dev/null 2>&1 || fail "NetworkManager missing"
 command -v avahi-daemon >/dev/null 2>&1 || fail "avahi-daemon missing"
