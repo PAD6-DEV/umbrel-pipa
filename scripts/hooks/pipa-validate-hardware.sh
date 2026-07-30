@@ -29,6 +29,14 @@ command -v NetworkManager >/dev/null 2>&1 || fail "NetworkManager missing"
 command -v avahi-daemon >/dev/null 2>&1 || fail "avahi-daemon missing"
 ok "network"
 
+# DNS harden (App Store / Docker pulls need working resolver on first boot)
+[ -f /etc/systemd/resolved.conf.d/99-pipa.conf ] || fail "pipa resolved drop-in missing"
+[ -x /usr/local/sbin/pipa-wait-dns ] || fail "pipa-wait-dns missing"
+[ -f /etc/systemd/system/umbrel.service.d/99-pipa-wait-dns.conf ] || fail "umbrel wait-dns drop-in missing"
+grep -q '8.8.8.8' /etc/NetworkManager/conf.d/10-cloudflaredns.conf \
+    || fail "multi-resolver DNS config missing"
+ok "dns"
+
 # umbrelOS / umbreld presence (paths vary by upstream version)
 if [ -x /usr/bin/umbreld ] || [ -x /usr/local/bin/umbreld ] || command -v umbreld >/dev/null 2>&1; then
     ok "umbreld"

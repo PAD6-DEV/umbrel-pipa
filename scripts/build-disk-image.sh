@@ -264,6 +264,7 @@ HOOKS=(
     pipa-grub-setup.sh
     pipa-services.sh
     pipa-network-polkit.sh
+    pipa-dns-harden.sh
     pipa-validate-hardware.sh
 )
 for hook in "${HOOKS[@]}"; do
