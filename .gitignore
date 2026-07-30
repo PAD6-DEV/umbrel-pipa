@@ -3,7 +3,8 @@ work/
 *.raw
 *.zip
 *.tar.xz
-.DS_Store
-umbrel-src/
+*.img
 !assets/
 !assets/**
+umbrel-src/
+.DS_Store
