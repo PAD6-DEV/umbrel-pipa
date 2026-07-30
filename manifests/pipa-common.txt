@@ -1,9 +1,10 @@
-# Xiaomi Pad 6 device packages for umbrelOS (Debian/Ubuntu debs from pipa-pkgs)
+# Xiaomi Pad 6 device packages for umbrelOS (Debian Trixie + pipa-pkgs debs)
 pipa-metapkg
 linux-image-pipa
 linux-modules-pipa
 xiaomi-pipa-firmware
-linux-firmware
+# Debian firmware (Ubuntu's linux-firmware name is provided by a compat shim at build time)
+firmware-linux
 grub-efi-arm64
 shim-signed
 dracut

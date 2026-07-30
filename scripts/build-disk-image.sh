@@ -124,9 +124,38 @@ pkg_available() {
     chroot "$ROOT" apt-cache show "$1" >/dev/null 2>&1
 }
 
+# pipa-metapkg Depends on Ubuntu's linux-firmware; Debian ships firmware-linux.
+# Install a tiny Provides shim so the Ubuntu-oriented dependency resolves.
+install_linux_firmware_compat() {
+    local stage="$ROOT/tmp/linux-firmware-compat"
+    mkdir -p "$stage/DEBIAN"
+    cat > "$stage/DEBIAN/control" <<'EOF'
+Package: pipa-linux-firmware-compat
+Version: 1.0
+Section: misc
+Priority: optional
+Architecture: all
+Maintainer: umbrel-pipa <pipa@local>
+Provides: linux-firmware
+Depends: firmware-linux
+Description: Compatibility shim mapping Ubuntu linux-firmware to Debian firmware-linux
+EOF
+    chroot "$ROOT" env DEBIAN_FRONTEND=noninteractive apt-get install -y firmware-linux
+    dpkg-deb -b "$stage" "$ROOT/tmp/pipa-linux-firmware-compat.deb"
+    chroot "$ROOT" dpkg -i /tmp/pipa-linux-firmware-compat.deb
+    rm -rf "$stage" "$ROOT/tmp/pipa-linux-firmware-compat.deb"
+}
+
+export DEBIAN_FRONTEND=noninteractive
+install_linux_firmware_compat
+
 REQUIRED=()
 MISSING=()
 for pkg in $PIPA_PKGS; do
+    # Skip names already satisfied by the compat shim / Debian firmware.
+    case "$pkg" in
+        linux-firmware) continue ;;
+    esac
     if pkg_available "$pkg"; then
         REQUIRED+=("$pkg")
     else
@@ -140,7 +169,6 @@ if [ "${#MISSING[@]}" -gt 0 ]; then
     exit 1
 fi
 
-export DEBIAN_FRONTEND=noninteractive
 chroot "$ROOT" env DEBIAN_FRONTEND=noninteractive apt-get install -y \
     -o Dpkg::Options::="--force-confnew" \
     "${REQUIRED[@]}"
