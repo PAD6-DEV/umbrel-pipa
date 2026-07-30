@@ -149,6 +149,16 @@ EOF
 export DEBIAN_FRONTEND=noninteractive
 install_linux_firmware_compat
 
+# Debian dracut scans /boot/vmlinuz-* and treats linux-pipa's
+# vmlinuz-<ver>.uncompressed as a fake kernel version. Hide those files
+# around every dpkg invocation, and ensure dirs grub/apt expect exist.
+mkdir -p "$ROOT/boot/grub" "$ROOT/var/log/apt"
+cat > "$ROOT/etc/apt/apt.conf.d/00-pipa-dracut-guard" <<'EOF'
+DPkg::Pre-Invoke {
+  "mkdir -p /boot/grub /var/log/apt; find /boot -maxdepth 1 -type f \\( -name 'vmlinuz-*.uncompressed' -o -name 'System.map-*.uncompressed' \\) ! -name '*.pipa-hide' -exec mv -f {} {}.pipa-hide \\; || true";
+};
+EOF
+
 REQUIRED=()
 MISSING=()
 for pkg in $PIPA_PKGS; do
@@ -169,9 +179,38 @@ if [ "${#MISSING[@]}" -gt 0 ]; then
     exit 1
 fi
 
+set +e
 chroot "$ROOT" env DEBIAN_FRONTEND=noninteractive apt-get install -y \
     -o Dpkg::Options::="--force-confnew" \
     "${REQUIRED[@]}"
+APT_RC=$?
+set -e
+
+if [ "$APT_RC" -ne 0 ]; then
+    echo "WARNING: apt-get install exited $APT_RC; attempting dpkg --configure recovery"
+    # Guard is still active: hide .uncompressed again and finish configures.
+    chroot "$ROOT" sh -c '
+      mkdir -p /boot/grub /var/log/apt
+      find /boot -maxdepth 1 -type f \( -name "vmlinuz-*.uncompressed" -o -name "System.map-*.uncompressed" \) ! -name "*.pipa-hide" -exec mv -f {} {}.pipa-hide \; || true
+    '
+    chroot "$ROOT" env DEBIAN_FRONTEND=noninteractive dpkg --configure -a
+fi
+
+# Restore hidden uncompressed boot artifacts for the flash image.
+chroot "$ROOT" sh -c '
+  for f in /boot/*.pipa-hide; do
+    [ -e "$f" ] || continue
+    mv -f "$f" "${f%.pipa-hide}"
+  done
+'
+rm -f "$ROOT/etc/apt/apt.conf.d/00-pipa-dracut-guard"
+
+for pkg in linux-image-pipa pipa-metapkg; do
+    chroot "$ROOT" dpkg -s "$pkg" >/dev/null 2>&1 || {
+        echo "ERROR: required package $pkg is not installed" >&2
+        exit 1
+    }
+done
 
 # Best-effort USB gadget networking helpers if published
 for opt in usb-network qrtr-tools rmtfs tqftpserv pd-mapper; do
