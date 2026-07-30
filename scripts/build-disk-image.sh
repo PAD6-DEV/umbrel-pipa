@@ -151,12 +151,24 @@ install_linux_firmware_compat
 
 # Debian dracut scans /boot/vmlinuz-* and treats linux-pipa's
 # vmlinuz-<ver>.uncompressed as a fake kernel version. Hide those files
-# around every dpkg invocation, and ensure dirs grub/apt expect exist.
-mkdir -p "$ROOT/boot/grub" "$ROOT/var/log/apt"
+# around every dpkg invocation via a helper script (avoids apt quoting bugs).
+mkdir -p "$ROOT/boot/grub" "$ROOT/var/log/apt" "$ROOT/usr/local/sbin"
+cat > "$ROOT/usr/local/sbin/pipa-hide-uncompressed-kernels" <<'EOF'
+#!/bin/sh
+set -eu
+mkdir -p /boot/grub /var/log/apt
+for f in /boot/vmlinuz-*.uncompressed /boot/System.map-*.uncompressed; do
+    [ -e "$f" ] || continue
+    case "$f" in
+        *.pipa-hide) continue ;;
+    esac
+    mv -f "$f" "${f}.pipa-hide"
+done
+exit 0
+EOF
+chmod +x "$ROOT/usr/local/sbin/pipa-hide-uncompressed-kernels"
 cat > "$ROOT/etc/apt/apt.conf.d/00-pipa-dracut-guard" <<'EOF'
-DPkg::Pre-Invoke {
-  "mkdir -p /boot/grub /var/log/apt; find /boot -maxdepth 1 -type f \\( -name 'vmlinuz-*.uncompressed' -o -name 'System.map-*.uncompressed' \\) ! -name '*.pipa-hide' -exec mv -f {} {}.pipa-hide \\; || true";
-};
+DPkg::Pre-Invoke { "/usr/local/sbin/pipa-hide-uncompressed-kernels"; };
 EOF
 
 REQUIRED=()
@@ -188,11 +200,7 @@ set -e
 
 if [ "$APT_RC" -ne 0 ]; then
     echo "WARNING: apt-get install exited $APT_RC; attempting dpkg --configure recovery"
-    # Guard is still active: hide .uncompressed again and finish configures.
-    chroot "$ROOT" sh -c '
-      mkdir -p /boot/grub /var/log/apt
-      find /boot -maxdepth 1 -type f \( -name "vmlinuz-*.uncompressed" -o -name "System.map-*.uncompressed" \) ! -name "*.pipa-hide" -exec mv -f {} {}.pipa-hide \; || true
-    '
+    chroot "$ROOT" /usr/local/sbin/pipa-hide-uncompressed-kernels || true
     chroot "$ROOT" env DEBIAN_FRONTEND=noninteractive dpkg --configure -a
 fi
 
