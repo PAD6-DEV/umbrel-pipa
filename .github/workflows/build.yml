@@ -1,0 +1,192 @@
+name: Build umbrelOS pipa image
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    tags:
+      - "v*"
+      - "nightly-*"
+
+permissions:
+  contents: write
+
+env:
+  UMBREL_REF: "1.7.4"
+  PIPA_PKGS_URL: "https://thespider2.github.io/pipa-pkgs/repo/ubuntu/"
+
+jobs:
+  image:
+    name: Build umbrelOS pipa
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build upstream umbrelOS arm64 rootfs
+        run: |
+          mkdir -p work output
+          chmod +x scripts/*.sh scripts/hooks/*.sh
+          ./scripts/build-umbrel-rootfs.sh work/umbrelos-root-arm64.tar
+
+      - name: Build injector image
+        run: docker build -t umbrel-pipa-builder .
+
+      - name: Inject pipa packages and create flash archive
+        run: |
+          docker run --rm --privileged \
+            -v "$PWD/work:/build/work" \
+            -v "$PWD/output:/build/output" \
+            -v /dev:/dev \
+            -e BUILD_GIT_REV="${{ github.sha }}" \
+            -e UMBREL_REF="${{ env.UMBREL_REF }}" \
+            -e PIPA_PKGS_URL="${{ env.PIPA_PKGS_URL }}" \
+            umbrel-pipa-builder
+
+      - name: Summarize artifacts
+        run: |
+          ls -lh output/ || true
+          for archive in output/*.tar.xz; do
+            [ -f "$archive" ] || continue
+            echo "=== $archive ==="
+            tar -tJf "$archive" | head -40
+          done
+
+      - name: Upload archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: umbrel-pipa
+          path: |
+            output/umbrel-pipa-*.tar.xz
+            output/umbrel-pipa-*.tar.xz.sha256
+          retention-days: 14
+          if-no-files-found: error
+
+  publish-tag:
+    name: Publish tag release
+    needs: [image]
+    runs-on: ubuntu-24.04
+    if: always() && needs.image.result == 'success' && (startsWith(github.ref, 'refs/tags/') || github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch')
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Download archive
+        uses: actions/download-artifact@v4
+        with:
+          name: umbrel-pipa
+          path: release-assets/
+
+      - name: Split oversized archives and stage release assets
+        id: stage
+        run: |
+          set -euo pipefail
+          mkdir -p staged
+          find release-assets -type f \( -name '*.tar.xz' -o -name '*.sha256' \) \
+            -exec cp -a {} staged/ \;
+          cd staged
+
+          MAX_BYTES=$((1900 * 1024 * 1024))
+          shopt -s nullglob
+          for archive in *.tar.xz; do
+            size=$(stat -c%s "$archive")
+            echo "$archive: $size bytes"
+            if [ "$size" -gt "$MAX_BYTES" ]; then
+              echo "Splitting $archive into <=1900MiB parts"
+              split -b "$MAX_BYTES" -d -a 2 --additional-suffix=.part \
+                "$archive" "${archive}."
+              rm -f "$archive"
+            fi
+          done
+
+          cat > join-archives.sh <<'JOIN'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          if [ "$#" -ne 1 ]; then
+            echo "Usage: $0 <archive.tar.xz>" >&2
+            exit 1
+          fi
+          out="$1"
+          parts=( "${out}".*.part )
+          if [ ! -e "${parts[0]}" ]; then
+            echo "No parts matching ${out}.*.part" >&2
+            exit 1
+          fi
+          echo "Joining ${#parts[@]} parts -> $out"
+          cat "${parts[@]}" > "$out"
+          if [ -f "${out}.sha256" ]; then
+            sha256sum -c "${out}.sha256"
+          fi
+          JOIN
+          sed -i 's/^          //' join-archives.sh
+          chmod +x join-archives.sh
+
+          echo "Staged assets:"
+          find . -type f -printf '%p (%s bytes)\n' | sort
+
+      - name: Create tag and GitHub Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          DATE=$(date -u +%Y%m%d)
+          SHORT_SHA=$(echo "${GITHUB_SHA}" | cut -c1-7)
+          RUN_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            TAG="${GITHUB_REF_NAME}"
+          else
+            TAG="build-${DATE}-${SHORT_SHA}"
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git tag -f -a "$TAG" "$GITHUB_SHA" -m "umbrelOS pipa build ${TAG}"
+            git push -f origin "refs/tags/$TAG"
+          fi
+
+          TITLE="umbrelOS Pipa ${TAG}"
+          cat > release-notes.md <<EOF
+          ## umbrelOS for Xiaomi Pad 6 (pipa)
+
+          Tag: \`${TAG}\`
+          Build date: ${DATE}
+          Commit: \`${GITHUB_SHA}\`
+          Upstream umbrel: \`${{ env.UMBREL_REF }}\`
+          Workflow: ${RUN_URL}
+
+          ### Download
+
+          \`umbrel-pipa-*.tar.xz\` (or \`.part\` pieces if split)
+
+          Files larger than ~1.9 GiB are split for GitHub's 2 GiB limit:
+
+          \`\`\`bash
+          ./join-archives.sh umbrel-pipa-YYYYMMDD.tar.xz
+          # or: cat umbrel-pipa-YYYYMMDD.tar.xz.*.part > umbrel-pipa-YYYYMMDD.tar.xz
+          sha256sum -c umbrel-pipa-YYYYMMDD.tar.xz.sha256
+          tar -xJf umbrel-pipa-YYYYMMDD.tar.xz
+          cd umbrel-pipa-YYYYMMDD
+          ./flash.sh
+          \`\`\`
+
+          After boot, open \`http://umbrel.local\` on the LAN (USB gadget
+          ethernet can be used for first-boot if WiFi is not configured yet).
+          EOF
+          sed -i 's/^          //' release-notes.md
+
+          mapfile -t ASSETS < <(find staged -type f | sort)
+          if [ "${#ASSETS[@]}" -eq 0 ]; then
+            echo "No release assets found" >&2
+            exit 1
+          fi
+
+          if gh release view "$TAG" >/dev/null 2>&1; then
+            gh release upload "$TAG" "${ASSETS[@]}" --clobber
+            gh release edit "$TAG" --title "$TITLE" --notes-file release-notes.md --latest=false
+          else
+            gh release create "$TAG" "${ASSETS[@]}" \
+              --verify-tag \
+              --title "$TITLE" \
+              --notes-file release-notes.md \
+              --latest=false
+          fi

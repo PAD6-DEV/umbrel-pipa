@@ -1,0 +1,9 @@
+output/
+work/
+*.raw
+*.zip
+*.tar.xz
+.DS_Store
+umbrel-src/
+!assets/
+!assets/**

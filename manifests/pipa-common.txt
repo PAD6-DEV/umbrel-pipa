@@ -1,0 +1,23 @@
+# Xiaomi Pad 6 device packages for umbrelOS (Debian/Ubuntu debs from pipa-pkgs)
+pipa-metapkg
+linux-image-pipa
+linux-modules-pipa
+xiaomi-pipa-firmware
+linux-firmware
+grub-efi-arm64
+shim-signed
+dracut
+iwd
+network-manager
+openssh-server
+systemd-resolved
+bluez
+wireless-regdb
+mesa-vulkan-drivers
+sudo
+ca-certificates
+locales
+dbus
+udev
+avahi-daemon
+libnss-mdns
