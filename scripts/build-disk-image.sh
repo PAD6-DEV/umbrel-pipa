@@ -149,27 +149,28 @@ EOF
 export DEBIAN_FRONTEND=noninteractive
 install_linux_firmware_compat
 
-# Debian dracut scans /boot/vmlinuz-* and treats linux-pipa's
-# vmlinuz-<ver>.uncompressed as a fake kernel version. Hide those files
-# around every dpkg invocation via a helper script (avoids apt quoting bugs).
-mkdir -p "$ROOT/boot/grub" "$ROOT/var/log/apt" "$ROOT/usr/local/sbin"
-cat > "$ROOT/usr/local/sbin/pipa-hide-uncompressed-kernels" <<'EOF'
+# Debian dracut treats /boot/vmlinuz-<ver>.uncompressed (shipped by linux-image-pipa)
+# as a separate kernel. Install with triggers deferred, then move those files
+# completely out of /boot before running configure/triggers.
+mkdir -p "$ROOT/boot/grub" "$ROOT/var/log/apt" "$ROOT/var/lib/pipa/boot-stash" "$ROOT/usr/local/sbin"
+cat > "$ROOT/usr/local/sbin/pipa-stash-uncompressed-kernels" <<'EOF'
 #!/bin/sh
 set -eu
-mkdir -p /boot/grub /var/log/apt
-for f in /boot/vmlinuz-*.uncompressed /boot/System.map-*.uncompressed; do
+mkdir -p /var/lib/pipa/boot-stash /boot/grub /var/log/apt
+for f in /boot/vmlinuz-*.uncompressed /boot/System.map-*.uncompressed \
+         /boot/vmlinuz-*.uncompressed.pipa-hide /boot/System.map-*.uncompressed.pipa-hide \
+         /boot/initrd.img-*.uncompressed /boot/initrd.img-*.uncompressed.pipa-hide \
+         /boot/initramfs-*.uncompressed /boot/initramfs-*.uncompressed.pipa-hide; do
     [ -e "$f" ] || continue
-    case "$f" in
-        *.pipa-hide) continue ;;
-    esac
-    mv -f "$f" "${f}.pipa-hide"
+    mv -f "$f" "/var/lib/pipa/boot-stash/$(basename "$f" | sed 's/\.pipa-hide$//')"
 done
+# Also remove any bogus initrds already generated for the fake kver.
+rm -f /boot/initrd.img-*.uncompressed /boot/initrd.img-*.uncompressed.pipa-hide \
+      /boot/initramfs-*.uncompressed /boot/initramfs-*.uncompressed.pipa-hide \
+      /boot/initrd.img-*.uncompressed.pipa-hide 2>/dev/null || true
 exit 0
 EOF
-chmod +x "$ROOT/usr/local/sbin/pipa-hide-uncompressed-kernels"
-cat > "$ROOT/etc/apt/apt.conf.d/00-pipa-dracut-guard" <<'EOF'
-DPkg::Pre-Invoke { "/usr/local/sbin/pipa-hide-uncompressed-kernels"; };
-EOF
+chmod +x "$ROOT/usr/local/sbin/pipa-stash-uncompressed-kernels"
 
 REQUIRED=()
 MISSING=()
@@ -194,24 +195,39 @@ fi
 set +e
 chroot "$ROOT" env DEBIAN_FRONTEND=noninteractive apt-get install -y \
     -o Dpkg::Options::="--force-confnew" \
+    -o DPkg::Options::="--no-triggers" \
     "${REQUIRED[@]}"
 APT_RC=$?
 set -e
 
-if [ "$APT_RC" -ne 0 ]; then
-    echo "WARNING: apt-get install exited $APT_RC; attempting dpkg --configure recovery"
-    chroot "$ROOT" /usr/local/sbin/pipa-hide-uncompressed-kernels || true
+chroot "$ROOT" /usr/local/sbin/pipa-stash-uncompressed-kernels
+
+set +e
+chroot "$ROOT" env DEBIAN_FRONTEND=noninteractive dpkg --configure -a
+CONFIG_RC=$?
+set -e
+
+if [ "$APT_RC" -ne 0 ] || [ "$CONFIG_RC" -ne 0 ]; then
+    echo "WARNING: apt/dpkg needed recovery (apt=$APT_RC configure=$CONFIG_RC)"
+    chroot "$ROOT" /usr/local/sbin/pipa-stash-uncompressed-kernels || true
     chroot "$ROOT" env DEBIAN_FRONTEND=noninteractive dpkg --configure -a
 fi
 
-# Restore hidden uncompressed boot artifacts for the flash image.
+# Keep uncompressed kernels stashed out of /boot permanently so later apt
+# triggers cannot invent kver "*.uncompressed". Image/Image.gz remain in /boot.
+# Optionally expose a non-vmlinuz name for tooling that wants the uncompressed image.
 chroot "$ROOT" sh -c '
-  for f in /boot/*.pipa-hide; do
+  for f in /var/lib/pipa/boot-stash/vmlinuz-*.uncompressed; do
     [ -e "$f" ] || continue
-    mv -f "$f" "${f%.pipa-hide}"
+    base="$(basename "$f")"
+    ver="${base#vmlinuz-}"
+    ver="${ver%.uncompressed}"
+    if [ ! -f /boot/Image ]; then
+      cp -f "$f" /boot/Image
+    fi
+    cp -f "$f" "/boot/Image-${ver}.uncompressed"
   done
 '
-rm -f "$ROOT/etc/apt/apt.conf.d/00-pipa-dracut-guard"
 
 for pkg in linux-image-pipa pipa-metapkg; do
     chroot "$ROOT" dpkg -s "$pkg" >/dev/null 2>&1 || {
@@ -219,6 +235,11 @@ for pkg in linux-image-pipa pipa-metapkg; do
         exit 1
     }
 done
+
+# Ensure optional follow-up installs also stash before triggers.
+cat > "$ROOT/etc/apt/apt.conf.d/00-pipa-dracut-guard" <<'EOF'
+DPkg::Pre-Invoke { "/usr/local/sbin/pipa-stash-uncompressed-kernels"; };
+EOF
 
 # Best-effort USB gadget networking helpers if published
 for opt in usb-network qrtr-tools rmtfs tqftpserv pd-mapper; do
