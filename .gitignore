@@ -6,5 +6,6 @@ work/
 *.img
 !assets/
 !assets/**
+!assets/*.img
 umbrel-src/
 .DS_Store
